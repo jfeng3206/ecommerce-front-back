@@ -1,0 +1,197 @@
+services:
+  backend:
+    build:
+      context: ./ecommerce
+    image: ecommerce-backend
+    environment:
+      INVENTORY_SERVICE_TOKEN: eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJzZXJ2aWNlX29yZGVyQGludGVybmFsLmxvY2FsIiwiaWF0IjoxNzYzMDg3OTA3LCJleHAiOjE3NjMxNzQzMDd9._cQC9rR59DuyRhOU_1Yt_31W3tbxq4rZsfmSNV14WFV7Q2uugrtjhbSmoe69v7w8yiwSoH6hpbwRQGhVGHelUQ
+      PAYMENT_SERVICE_TOKEN: eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJzZXJ2aWNlX29yZGVyQGludGVybmFsLmxvY2FsIiwiaWF0IjoxNzYzMDg3OTA3LCJleHAiOjE3NjMxNzQzMDd9._cQC9rR59DuyRhOU_1Yt_31W3tbxq4rZsfmSNV14WFV7Q2uugrtjhbSmoe69v7w8yiwSoH6hpbwRQGhVGHelUQ
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/ecommerce?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: chuwa
+      SPRING_DATASOURCE_PASSWORD: Chuwa12345
+      SPRING_DATA_MONGODB_URI: mongodb://mongodb:27017/ecommerce
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_CASSANDRA_CONTACT_POINTS: cassandra
+      SPRING_CASSANDRA_PORT: "9042"
+      SPRING_CASSANDRA_LOCAL_DATACENTER: datacenter1
+      SPRING_CASSANDRA_KEYSPACE_NAME: ecommerce
+      SPRING_CASSANDRA_SCHEMA_ACTION: CREATE_IF_NOT_EXISTS
+      SPRING_CASSANDRA_USERNAME: cassandra
+      SPRING_CASSANDRA_PASSWORD: cassandra
+      SPRING_CASSANDRA_REQUEST_CONSISTENCY: LOCAL_QUORUM
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      cassandra-init:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    networks:
+      - ecommerce
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./ecommerce_front-end
+      args:
+        VITE_API_BASE_URL: http://localhost:8080/api
+    image: ecommerce-frontend
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "8081:80"
+    networks:
+      - ecommerce
+    restart: unless-stopped
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.2
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    networks:
+      - ecommerce
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.2
+    hostname: kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    networks:
+      - ecommerce
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8082:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    depends_on:
+      - kafka
+    networks:
+      - ecommerce
+
+
+  mysql:
+    image: mysql:8
+    command: >
+      mysqld  --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_DATABASE: ecommerce
+      MYSQL_USER: chuwa
+      MYSQL_PASSWORD: Chuwa12345
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h localhost -u$${MYSQL_USER} -p$${MYSQL_PASSWORD}
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - ecommerce
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./scripts/mongodb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh --quiet --eval "db.runCommand({ ping: 1 })"'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ecommerce
+    restart: unless-stopped
+
+  cassandra:
+    image: cassandra:4.1
+    container_name: cassandra
+    environment:
+      CASSANDRA_CLUSTER_NAME: ecommerce
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_RACK: rack1
+      CASSANDRA_START_RPC: 'true'
+    ports:
+      - "9042:9042"
+    networks:
+      - ecommerce
+    healthcheck:
+      test: [ "CMD-SHELL", "cqlsh -e 'DESCRIBE KEYSPACES' || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+
+  cassandra-init:
+    image: cassandra:4.1
+    container_name: cassandra-init
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    volumes:
+      - ./scripts/cassandra/init.sh:/init.sh
+    entrypoint: [ "/bin/bash", "/init.sh" ]
+    networks:
+      - ecommerce
+    restart: "no"
+
+
+  mysql-seed:
+    image: mysql:8
+    depends_on:
+      mysql:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    volumes:
+      - ./scripts/mysql/seed-users.sh:/seed-users.sh:ro
+    entrypoint: ["/bin/bash","/seed-users.sh"]
+    networks:
+      - ecommerce
+    restart: "no"
+
+
+networks:
+  ecommerce:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  mongo_data:
+  cassandra_data:
+  kafka_data:
